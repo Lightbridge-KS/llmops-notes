@@ -1,0 +1,106 @@
+---
+title: "LLM Hardware Specification"
+---
+
+Let me break down the key factors/matrices to consider when sizing hardware for running an LLM.
+
+## High-Level View
+
+```
+┌─────────────────────────────────────────────────────────┐
+│         LLM Hardware Requirements Evaluation            │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌──────────────┐   ┌──────────────┐   ┌─────────────┐  │
+│  │    MODEL     │ → │   WORKLOAD   │ → │   SYSTEM    │  │
+│  │   (what?)    │   │    (how?)    │   │  (where?)   │  │
+│  └──────────────┘   └──────────────┘   └─────────────┘  │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+## 1. Model Factors (what you're running)
+
+| Factor | Examples | Why it matters |
+|---|---|---|
+| **Parameters (N)** | 7B, 13B, 70B, 405B | Dominant memory cost |
+| **Precision (P)** | FP32, FP16/BF16, INT8, INT4 | Bytes per parameter |
+| **Architecture** | Dense vs. MoE (e.g., Mixtral) | MoE activates subset → less compute, same VRAM |
+| **Context length** | 4K, 32K, 128K, 1M tokens | Drives KV-cache size |
+| **Tokenizer / vocab** | 32K–250K | Small effect on embedding size |
+
+**Precision cheat sheet (bytes per param):**
+
+```
+FP32   ████████  4.0 bytes
+FP16   ████      2.0 bytes   ← common default
+BF16   ████      2.0 bytes
+INT8   ██        1.0 byte
+INT4   █         0.5 bytes   ← popular for laptops
+```
+
+## 2. Workload Factors (how you're running it)
+
+| Factor | Question to ask |
+|---|---|
+| **Task type** | Inference, fine-tuning, or training from scratch? |
+| **Batch size** | 1 user at a time, or N concurrent? |
+| **Latency target** | Tokens/sec needed? (chat ≈ 20 t/s, batch jobs lower OK) |
+| **Throughput** | Requests/sec for serving? |
+| **Prompt length** | Long-context (RAG, docs) or short chat? |
+
+Training/fine-tuning is **3–4× more memory-hungry** than inference because of optimizer states and gradients.
+
+## 3. System Factors (where you're running it)
+
+```
+┌─────────────────────────────────────────┐
+│  MEMORY           ← usually the bottleneck
+│  ├── VRAM (NVIDIA/AMD GPU)             
+│  └── Unified memory (Apple Silicon)    
+│                                         
+│  COMPUTE                                
+│  ├── GPU: tensor cores, CUDA cores     
+│  ├── CPU: cores, AVX/AVX-512           
+│  └── NPU: Apple Neural Engine, NPUs    
+│                                         
+│  MEMORY BANDWIDTH ← often the real      
+│  (GB/s)             bottleneck for       
+│                     inference           
+│                                         
+│  STORAGE                                
+│  └── NVMe SSD for model load speed     
+│                                         
+│  INTERCONNECT                           
+│  └── NVLink/PCIe for multi-GPU         
+└─────────────────────────────────────────┘
+```
+
+## The Core Memory Equation (for inference)
+
+```
+Total VRAM ≈ Model Weights + KV Cache + Activations + Overhead
+
+Model Weights  = N_params × bytes_per_param
+KV Cache       ≈ 2 × n_layers × n_heads × head_dim × seq_len
+                 × batch × bytes_per_param
+Overhead       ≈ 1–2 GB (framework, CUDA kernels)
+```
+
+**Quick rule of thumb for weights only:**
+
+| Model | FP16 | INT8 | INT4 |
+|---|---|---|---|
+| 7B | ~14 GB | ~7 GB | ~3.5 GB |
+| 13B | ~26 GB | ~13 GB | ~6.5 GB |
+| 70B | ~140 GB | ~70 GB | ~35 GB |
+
+Then add **20–30%** for KV cache + overhead.
+
+## Why Memory Bandwidth ≠ Memory Capacity
+
+For inference, the GPU/CPU must stream every weight for each token generated. So:
+
+```
+Max tokens/sec ≈ Memory Bandwidth (GB/s) / Model Size (GB)
+```

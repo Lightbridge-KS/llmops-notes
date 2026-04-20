@@ -9,6 +9,10 @@ book:
   site-url: https://llmops-notes-lightbridge.netlify.app
   chapters:
     - index.qmd
+    - part: Hardware for LLM
+      chapters: 
+        - text: "LLM Hardware Specification"
+          href: "contents/hardware/llm-hardware-req.qmd"
 
 format:
   html:
