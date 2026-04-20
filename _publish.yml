@@ -1,0 +1,4 @@
+- source: project
+  netlify:
+    - id: 65f5d5fc-cc30-4c54-b433-74b5734fcecc
+      url: https://llmops-notes-lightbridge.netlify.app
