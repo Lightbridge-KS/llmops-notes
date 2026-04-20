@@ -1,0 +1,22 @@
+project:
+  type: book
+
+book:
+  title: "LLMOps Notes"
+  author: "Kittipos Sirivongrungson"
+  date: today
+  repo-url: https://github.com/Lightbridge-KS/llmops-notes
+  site-url: https://llmops-notes-lightbridge.netlify.app
+  chapters:
+    - index.qmd
+
+format:
+  html:
+    theme:
+      light:
+      - cosmo
+      dark:
+      - darkly
+    toc-depth: 4
+
+freeze: auto
