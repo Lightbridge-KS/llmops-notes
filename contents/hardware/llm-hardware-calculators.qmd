@@ -1,0 +1,93 @@
+---
+title: "LLM Hardware Calculators"
+---
+
+Several online calculators can help estimate whether a large language model will run on a given machine, how much memory it will require, and in some cases how much throughput to expect.
+
+This chapter focuses on the most useful calculators for practical **inference planning**, especially when comparing models, quantization levels, context lengths, and deployment patterns.
+
+## Top picks
+
+### 1. ApX ML VRAM Calculator
+
+<https://apxml.com/tools/vram-calculator>
+
+This is the most broadly useful calculator in the group. It supports both conventional GPU setups and Apple Silicon, and it estimates not only memory usage but also expected tokens-per-second. It also accounts for quantization, memory bandwidth, and GPU-specific performance differences.
+
+For general planning, this is the strongest first stop.
+
+### 2. Hugging Face LLM-Model-VRAM-Calculator (NyxKrage)
+
+<https://huggingface.co/spaces/NyxKrage/LLM-Model-VRAM-Calculator>
+
+This one is especially useful when evaluating a **specific Hugging Face model**. You can provide the model URL, choose quantization, adjust context length, and optionally enter hardware details.
+
+It is a good cross-check when your planning starts from a concrete model on the Hugging Face Hub rather than from a general hardware budget.
+
+### 3. SelfHostLLM
+
+<https://selfhostllm.org/>
+
+SelfHostLLM is more deployment-oriented. It focuses on self-hosted inference and, importantly, estimates **maximum concurrent requests** in addition to raw memory usage.
+
+Its planning logic is centered around the idea that:
+
+```text
+Available Memory = Total VRAM - System Overhead - Model Memory
+Max Requests = Available Memory / KV Cache per Request
+```
+
+That makes it especially useful when the question is not just "Can this model run?" but also "How many simultaneous users or requests can this deployment support?"
+
+## Also worth knowing
+
+### 4. LocalLLM.in VRAM Calculator
+
+<https://localllm.in/blog/interactive-vram-calculator>
+
+This calculator aims for more precise memory estimation and claims close agreement with real `llama.cpp` measurements. It also accounts for features such as grouped-query attention and newer architecture details.
+
+It is useful when precision matters more than convenience.
+
+### 5. Onyx, What LLM Can I Run?
+
+<https://onyx.app/llm-hardware-requirements>
+
+Onyx is optimized for speed and convenience. It auto-detects hardware, estimates model speed and memory usage, and helps shortlist models that are likely to run well on the current system.
+
+This is one of the fastest ways to move from hardware inspection to a plausible model shortlist.
+
+## Feature comparison
+
+| Calculator | Apple Silicon | TPS estimate | Hugging Face model input | Concurrency |
+|---|---:|---:|---:|---:|
+| ApX ML | ✓ | ✓ | ✓ | - |
+| HF NyxKrage | - | - | ✓ | - |
+| SelfHostLLM | - | - | - | ✓ |
+| LocalLLM.in | - | - | ✓ | - |
+| Onyx | ✓ (auto) | ✓ | - | - |
+
+## A practical recommendation
+
+A pragmatic workflow looks like this:
+
+1. Start with **ApX ML** for broad planning, especially when comparing hardware classes, quantization options, and rough throughput.
+2. Cross-check with **HF NyxKrage** when evaluating a specific model from the Hugging Face Hub.
+3. Use **SelfHostLLM** when concurrency and serving capacity matter.
+4. Use **LocalLLM.in** when you want a more measurement-oriented estimate.
+5. Use **Onyx** when you want a fast shortlist of likely runnable models.
+
+In practice, **ApX ML + HF NyxKrage** will cover most single-user model selection questions, while **SelfHostLLM** becomes more important when moving toward shared or production-style deployments.
+
+## Why these calculators matter
+
+Hardware calculators are useful because LLM feasibility depends on multiple interacting variables:
+
+- parameter count
+- quantization level
+- context length
+- KV-cache growth
+- memory bandwidth
+- concurrency target
+
+A single static rule such as "7B fits in X GB" is often too crude. These calculators help turn those variables into more realistic planning decisions before testing a real deployment.

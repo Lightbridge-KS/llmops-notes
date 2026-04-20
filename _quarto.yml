@@ -13,6 +13,8 @@ book:
       chapters: 
         - text: "LLM Hardware Specification"
           href: "contents/hardware/llm-hardware-req.qmd"
+        - text: "LLM Hardware Calculators"
+          href: "contents/hardware/llm-hardware-calculators.qmd"
 
 format:
   html:
