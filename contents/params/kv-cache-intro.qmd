@@ -1,0 +1,103 @@
+---
+title: "KV Cache Explained"
+---
+
+**KV cache** (Key-Value cache) is an inference-time optimization for transformer-based LLMs that stores the **Key (K)** and **Value (V)** projections from previous tokens, so they don't have to be recomputed at every generation step.
+
+To understand why it matters, let's start with what happens during autoregressive generation.
+
+## The Problem: Naive Generation is Wasteful
+
+When an LLM generates text, it produces one token at a time. Each new token requires a full forward pass through the transformer. Inside each attention layer, every token needs three vectors: Query (Q), Key (K), and Value (V).
+
+Without caching, here's what happens:
+
+```
+Step 1: Generate token after "The"
+        Compute K, V for: [The]
+        
+Step 2: Generate token after "The cat"
+        Compute K, V for: [The, cat]    ← recomputes "The" again!
+        
+Step 3: Generate token after "The cat sat"
+        Compute K, V for: [The, cat, sat]  ← recomputes "The", "cat" again!
+        
+Step N: ...
+        Compute K, V for: [tok_1, tok_2, ..., tok_N]  ← O(N²) total work
+```
+
+Notice the wasted computation: K and V for "The" never change once it's been processed, but we keep recomputing them. For a 10,000-token context, this is enormous.
+
+## The Solution: Cache K and V
+
+The insight: in causal (decoder-only) attention, a past token's K and V vectors are **deterministic functions of that token and its position** — they don't depend on future tokens. So we can compute them once and store them.
+
+```
+                    KV CACHE (grows as we generate)
+                    ┌─────────────────────────────┐
+Layer L:            │  K₁  K₂  K₃  ...  Kₙ        │
+                    │  V₁  V₂  V₃  ...  Vₙ        │
+                    └──────────────▲──────────────┘
+                                   │
+                                   │ append new (Kₙ₊₁, Vₙ₊₁)
+                                   │
+                       ┌───────────┴───────────┐
+                       │ New token at step n+1 │
+                       │  → compute Q, K, V    │
+                       │    only for THIS token│
+                       └───────────────────────┘
+```
+
+So at generation step *n+1*, we only compute Q, K, V for the **single new token**, then attend over the cached K and V from all previous tokens. This turns each generation step from O(N) work into O(1) work for the K/V projections (attention itself is still O(N) for the dot products, but that's unavoidable).
+
+## Why "K and V" but not Q?
+
+This often confuses people. Here's the intuition:
+
+```
+Attention(Q, K, V) = softmax( Q · Kᵀ / √d ) · V
+                     ╰──────┬──────╯
+                       attention scores
+
+  Q  ──► current token asking: "what do I attend to?"
+  K  ──► past tokens advertising: "here's what I am"
+  V  ──► past tokens offering: "here's my content"
+```
+
+Only the **current** token needs a Q (it's the one doing the asking). All past tokens need their K and V available, but they don't need Qs anymore — they've already done their asking in earlier steps.
+
+## The Trade-off: Memory Cost
+
+KV cache is fast but **memory-hungry**. Cache size scales as:
+
+```
+cache_size ≈ 2 × n_layers × n_heads × head_dim × seq_len × batch × precision_bytes
+              │                                   │
+              └─ 2 because K and V                └─ this is what blows up
+```
+
+For a 70B-parameter model with a 100k-token context, the KV cache can be **tens of gigabytes** — often larger than the model weights themselves. This is why long-context inference is expensive and why techniques like **Multi-Query Attention (MQA)**, **Grouped-Query Attention (GQA)**, and **PagedAttention** (vLLM) exist — they're all about shrinking or managing the KV cache.
+
+## Why This Matters for Agentic AI
+
+Agentic workflows hit the KV cache hard because they involve:
+
+- **Long contexts** (tool definitions, system prompts, conversation history, retrieved documents)
+- **Many turns** (each tool call adds tokens to the context)
+- **Repeated prefixes** (the same system prompt across many calls)
+
+Modern inference engines exploit this with **prefix caching** — if two requests share a prefix (e.g., the same system prompt), the K and V for that prefix are computed once and reused across requests. Anthropic's API exposes this as **prompt caching**, which can cut costs and latency dramatically for agentic loops where you keep hitting the model with the same lengthy preamble.
+
+```
+Without prompt caching:           With prompt caching:
+┌─────────────────┐               ┌─────────────────┐
+│ System (5k tok) │ recompute     │ System (5k tok) │ ◄── cached KV
+├─────────────────┤   every       ├─────────────────┤      (reused)
+│ Tools  (3k tok) │   call        │ Tools  (3k tok) │ ◄── cached KV
+├─────────────────┤               ├─────────────────┤
+│ Turn 1 input    │               │ Turn 1 input    │ ◄── only this is new
+└─────────────────┘               └─────────────────┘
+   8k tok work                        ~1k tok work
+```
+
+So in short: **KV cache turns inference from quadratic to linear in sequence length**, at the cost of memory — and it's the single most important optimization underlying modern LLM serving, especially for agents.
