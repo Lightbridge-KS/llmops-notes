@@ -19,6 +19,8 @@ book:
       chapters: 
         - text: KV Cache
           href: "contents/params/kv-cache-intro.qmd"
+        - text: KV Cache Quantization
+          href: "contents/params/kv-cache-quantization.qmd"
 
 format:
   html:

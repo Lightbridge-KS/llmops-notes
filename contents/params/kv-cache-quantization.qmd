@@ -1,0 +1,133 @@
+---
+title: "KV Cache Quantization Explained"
+---
+
+
+## What "Quantization" Means in General
+
+In machine learning, **quantization** = representing numbers with fewer bits. Instead of storing each number as a high-precision floating-point value, we approximate it with a lower-precision format.
+
+```
+FP32  (32 bits) ──► 3.14159265358979...    high precision, big memory
+FP16  (16 bits) ──► 3.1416                 half the memory
+FP8   ( 8 bits) ──► 3.14                   quarter
+INT8  ( 8 bits) ──► 50  (scaled integer)   quarter
+INT4  ( 4 bits) ──► 3   (scaled integer)   eighth
+```
+
+It's analogous to JPEG compression for images: you trade some fidelity for a much smaller file.
+
+## Applied to the KV Cache
+
+Recall from before — the KV cache stores the K and V tensors for every past token, every layer, every attention head. By default, those tensors are stored in the same precision the model runs in: usually **FP16** or **BF16** (16-bit floats).
+
+**KV cache quantization** stores those K/V tensors in a lower-precision format to save VRAM:
+
+```
+                  Memory footprint per K/V value
+                  ─────────────────────────────────
+  FP16 / BF16  ──► ████████████████  16 bits  (baseline, 100%)
+  FP8          ──► ████████           8 bits  (50% smaller)
+  INT8         ──► ████████           8 bits  (50% smaller)
+  INT4         ──► ████               4 bits  (75% smaller)
+```
+
+So if your KV cache was eating 8 GB of VRAM at FP16, switching to INT4 would bring it down to about **2 GB** — freeing up 6 GB for longer contexts, larger batch sizes, or just letting the model fit on your GPU at all.
+
+## How It Actually Works
+
+When you store a tensor in INT8 or INT4, you can't just truncate the float — you'd lose all the magnitude information. Instead, quantization uses a **scale factor** (and sometimes a zero-point) to map a range of float values onto the small integer range:
+
+```
+  Original FP16 values in a block:
+  [-2.3, -0.8, 0.1, 1.5, 2.7, ...]
+                    │
+                    │  find min/max, compute scale
+                    ▼
+  scale = (max - min) / (2ᴺ - 1)     ← N = 8 for INT8, 4 for INT4
+  
+  Stored as:
+  ┌──────────────────────────┐
+  │ scale (FP16)             │  ← one scale per "block" of values
+  │ zero_point (optional)    │
+  │ [int_0, int_1, int_2,...]│  ← the quantized integers
+  └──────────────────────────┘
+  
+  Dequantize on-the-fly during attention:
+  float_value ≈ (int_value - zero_point) × scale
+```
+
+The scale is shared across a **block** (e.g., 32 or 128 values), so the per-value overhead is tiny. This is called **block-wise quantization**, and it's what makes INT4 viable — without blocks, a single outlier would ruin the precision for the whole tensor.
+
+## The Format Differences
+
+```
+┌──────────┬─────────┬──────────────────────────────────────────┐
+│ Format   │ Bits    │ Character                                │
+├──────────┼─────────┼──────────────────────────────────────────┤
+│ FP16     │ 16      │ Float, wide range, default for most LLMs │
+│ BF16     │ 16      │ Float, same range as FP32, less mantissa │
+│ FP8      │  8      │ Float, preserves dynamic range better    │
+│ INT8     │  8      │ Integer + scale, simpler & well-supported│
+│ INT4     │  4      │ Integer + scale, aggressive, lossy       │
+└──────────┴─────────┴──────────────────────────────────────────┘
+```
+
+**FP8 vs INT8** — both are 8 bits, but FP8 keeps a small exponent so it handles outliers better. INT8 is uniform across its range. For KV caches, FP8 is often slightly higher quality; INT8 is more universally supported in hardware/kernels.
+
+**INT4 (Experimental)** — labeled experimental in your UI because 4 bits is *aggressive*. You can see noticeable quality degradation, especially on long contexts (errors compound across many tokens), reasoning tasks, and code generation. Some heads/layers tolerate it fine; others don't.
+
+## The Trade-off Curve
+
+```
+  Quality
+    ▲
+    │  ●  FP16/BF16   (baseline, what the model was trained at)
+    │   ╲
+    │    ●  FP8       (tiny quality loss, ~free)
+    │     ╲
+    │      ●  INT8    (small quality loss, usually fine)
+    │       ╲
+    │        ╲
+    │         ●  INT4 (visible quality loss, especially long ctx)
+    │
+    └─────────────────────────────► VRAM saved
+       0%       50%        75%
+```
+
+The general guidance:
+
+- **FP16/BF16** — use when you have VRAM headroom and want maximum quality.
+- **FP8** — excellent default if your GPU supports it (Hopper/Ada, RTX 40-series, H100). Near-lossless in practice.
+- **INT8** — broader hardware support, very safe quality-wise.
+- **INT4** — only when you're desperate for VRAM (e.g., trying to run a 70B model with 32k context on a single consumer GPU). Test the output on your actual workload before trusting it.
+
+## Why It's Specifically Useful for Long Contexts
+
+The UI hint says "*especially for long sequences*" — here's why. KV cache size scales **linearly with sequence length**, while model weights are fixed. So:
+
+```
+  Short context (2k tokens):
+  ┌─────────────────────────────┐
+  │ Model weights      14 GB    │ ◄── dominates
+  │ KV cache            1 GB    │
+  └─────────────────────────────┘
+  Quantizing KV cache → saves ~0.5 GB. Meh.
+
+  Long context (100k tokens):
+  ┌─────────────────────────────┐
+  │ Model weights      14 GB    │
+  │ KV cache           25 GB    │ ◄── dominates!
+  └─────────────────────────────┘
+  Quantizing KV cache to INT4 → saves ~19 GB. Huge.
+```
+
+For your agentic AI work — where contexts get long fast (tool definitions, retrieved documents, multi-turn history) — KV cache quantization is one of the highest-leverage knobs you can turn on a local setup.
+
+## My Practical Recommendation
+
+For your M3 Pro with 36 GB unified memory running local models (I assume via LM Studio, Ollama, or MLX):
+
+- Start with **FP16/BF16** as default and only change if you're hitting memory limits.
+- If you need to fit longer context or a bigger model: try **FP8** first (if supported) or **INT8**. You'll likely not notice quality differences for typical chat/coding tasks.
+- Treat **INT4** as a last resort, and benchmark it on a representative task before relying on it — particularly for radiology-related reasoning or anything where precision matters.
