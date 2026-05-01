@@ -1,0 +1,53 @@
+---
+title: "Inference Quantization Explained"
+---
+
+Inference quantization is the process of reducing the numerical precision used to store a model's weights (and sometimes activations) when running inference. Instead of using full 32-bit floating-point numbers, the weights are compressed into smaller representations — fewer bits per number.
+
+The trade-off is fundamental:
+
+```text
+Higher precision ◄───────────────────────────────► Lower precision
+┌────────┐ ┌────────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐
+│ FP32   │ │ FP16   │ │ Q8   │ │ Q6   │ │ Q4   │ │ Q2   │
+└────────┘ └────────┘ └──────┘ └──────┘ └──────┘ └──────┘
+32 bit     16 bit     8 bit    ~6 bit   ~4 bit   ~2 bit
+
+More VRAM ──────────────────────────────────────────► Less VRAM
+Slower    ──────────────────────────────────────────► Faster
+Best      ──────────────────────────────────────────► Quality loss
+quality
+```
+
+## Why Quantize?
+
+A 7B parameter model in FP32 needs ~28 GB of VRAM. Quantize the same model to Q4 and it fits in ~4 GB — runnable on a laptop GPU. The model's behavior is *approximated* using less information per weight, but for many tasks the quality drop is surprisingly small.
+
+## How a Single Weight Is Stored
+
+Conceptually, imagine one weight value `w = 0.7384921…`:
+
+```text
+FP32 : sign │ 8-bit exponent │ 23-bit mantissa → very precise
+FP16 : sign │ 5-bit exponent │ 10-bit mantissa → still smooth
+Q8   : maps weight into one of 256 integer levels → coarse but small
+Q4   : maps weight into one of 16 integer levels → very coarse
+```
+
+Integer-style quantization (`Q*`) typically stores weights in blocks: a group of weights shares a scale factor (and sometimes a zero-point), so the integers can be dequantized back to float at runtime.
+
+## The Specific Options in Your Dropdown
+
+| Option | Family | What it is |
+|----------|--------------------|-------------------------------------------------------------------------------------------------------|
+| FP32 | IEEE float | Full precision, training-grade. Rarely needed for inference. |
+| FP16 | IEEE float | Half precision. Standard "high-quality" inference baseline. |
+| NVFP6 | NVIDIA microscaling | A 6-bit floating-point format from NVIDIA's MX (Microscaling) family, designed for Blackwell-era GPUs. |
+| NVFP4 | NVIDIA microscaling | The 4-bit cousin — even smaller, optimized for hardware tensor cores. |
+| Q8 | Integer quant | 8-bit integer quantization. Near-FP16 quality, half the VRAM. Very safe default. |
+| Q7 | Integer quant | 7-bit — uncommon, intermediate point. |
+| Q6K | llama.cpp "K-quant" | 6-bit with the *K-quant* scheme: weights grouped into super-blocks, with smarter per-block scales for better quality at the same bit budget. |
+
+The K suffix (`Q6K`, `Q4_K_M`, `Q5_K_S`, etc.) comes from the llama.cpp ecosystem and signals improved block-wise quantization that preserves quality much better than naive Q4/Q6.
+
+## Practical Picking Guide

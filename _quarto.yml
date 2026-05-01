@@ -21,6 +21,8 @@ book:
           href: "contents/params/kv-cache-intro.qmd"
         - text: KV Cache Quantization
           href: "contents/params/kv-cache-quantization.qmd"
+        - text: Inference Quantization
+          href: "contents/params/inference-quantization-explained.qmd"
 
 format:
   html:
