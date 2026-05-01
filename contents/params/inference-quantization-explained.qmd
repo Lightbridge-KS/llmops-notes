@@ -51,3 +51,20 @@ Integer-style quantization (`Q*`) typically stores weights in blocks: a group of
 The K suffix (`Q6K`, `Q4_K_M`, `Q5_K_S`, etc.) comes from the llama.cpp ecosystem and signals improved block-wise quantization that preserves quality much better than naive Q4/Q6.
 
 ## Practical Picking Guide
+
+```text
+Quality Footprint
+ ▲ ▲
+ FP16   │ ●                                      │ ● FP32
+ Q8     │ ●                                      │ ● FP16
+ Q6K    │ ● ◄── sweet spot for many users        │ ● Q8
+ Q5_K_M │ ●                                      │ ● Q6K
+ Q4_K_M │ ● ◄── common laptop sweet spot         │ ● Q4_K_M
+ Q3     │ ●                                      │ ● Q3
+ Q2     │ ● noticeable degradation               │ ● Q2
+        └──────────────────────────────────►     └──────────────────►
+```
+
+A common rule of thumb: Q6K and Q5_K_M are often indistinguishable from FP16 for chat-style use, while Q4_K_M is the most popular "fits-on-consumer-hardware" choice. Drop below Q4 only when memory is truly tight.
+
+For your radiology AI work, if you ever serve multimodal or vision-language models locally, Q6K or Q8 is a reasonable default — diagnostic-adjacent reasoning tends to be more sensitive to quantization than casual chat, so erring on the higher-precision side is wise.
